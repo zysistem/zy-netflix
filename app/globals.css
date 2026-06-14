@@ -235,3 +235,58 @@ footer {
   .modal-title { font-size: 20px; }
   footer { padding: 32px 16px 16px; }
 }
+
+/* Row scroll */
+.row-wrapper { position: relative; display: flex; align-items: center; }
+.row-cards {
+  display: flex; gap: 10px; overflow-x: auto; scroll-behavior: smooth;
+  padding: 10px 4px; -webkit-overflow-scrolling: touch; flex: 1;
+  scrollbar-width: none; -ms-overflow-style: none;
+}
+.row-cards::-webkit-scrollbar { height: 0; display: none; }
+.row-arrow {
+  position: absolute; z-index: 10; width: 48px; height: 100%; min-height: 280px;
+  background: linear-gradient(90deg, rgba(20,20,20,0.9), transparent);
+  border: none; color: #fff; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; transition: opacity 0.3s; top: 0;
+}
+.row-arrow-right { right: 0; background: linear-gradient(270deg, rgba(20,20,20,0.9), transparent); }
+.row-wrapper:hover .row-arrow { opacity: 1; }
+.row-arrow svg { width: 28px; height: 28px; }
+
+/* Card extras */
+.movie-card-peers { font-size: 10px; color: #999; margin-top: 2px; }
+.hero-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; font-size: 14px; color: #b3b3b3; }
+.hero-rating { color: #46d369; font-weight: 700; }
+
+/* Quality buttons */
+.quality-btn {
+  display: flex; flex-direction: column; gap: 4px; padding: 12px 18px;
+  background: rgba(229,9,20,0.15); border: 1px solid rgba(229,9,20,0.4);
+  border-radius: 6px; color: #fff; cursor: pointer; font-size: 15px; font-weight: 700;
+  transition: all 0.2s; text-align: center;
+}
+.quality-btn:hover { background: rgba(229,9,20,0.35); transform: translateY(-2px); }
+.quality-info { font-size: 11px; font-weight: 400; color: #aaa; }
+
+/* Search */
+.no-results { text-align: center; padding: 80px 20px; font-size: 20px; color: #666; }
+.content-section.search-mode { margin-top: 0 !important; padding-top: 120px; }
+
+/* Stream */
+.video-wrapper { background: #000; position: relative; }
+video { width: 100%; max-height: 65vh; display: block; }
+.video-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+.video-loading-text { color: #fff; font-size: 14px; }
+.stream-modal { max-width: 1000px; }
+.stream-stats { display: flex; gap: 20px; font-size: 14px; margin: 8px 0; }
+.stream-stat-green { color: #46d369; }
+.stream-progress { height: 4px; background: #333; border-radius: 4px; overflow: hidden; }
+.stream-progress-bar { height: 100%; background: #e50914; transition: width 0.5s; }
+.spinner { width: 50px; height: 50px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #e50914; border-radius: 50%; animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 768px) {
+  .row-arrow { display: none !important; }
+}
