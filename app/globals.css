@@ -290,3 +290,5 @@ video { width: 100%; max-height: 65vh; display: block; }
 @media (max-width: 768px) {
   .row-arrow { display: none !important; }
 }
+.quality-format { font-size: 10px; color: #666; }
+.quality-hint b { color: #e50914; }

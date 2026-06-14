@@ -110,16 +110,55 @@ export default function Home() {
     setStreamStatus('⏳ Torrent bulunuyor (peers aranıyor)...');
 
     client.add(url, (torrentObj) => {
-      const file = torrentObj.files.find(f => f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm'));
-      const videoFile = file || torrentObj.files[0];
-      if (videoFile && videoRef.current) {
-        videoFile.renderTo(videoRef.current, { autoplay: true, controls: true });
-        setStreamStatus('▶ Oynatılıyor...');
+      // Priority: mp4 > webm > mkv > largest file
+      const videoFile = torrentObj.files.find(f => f.name.endsWith('.mp4')) 
+        || torrentObj.files.find(f => f.name.endsWith('.webm'))
+        || torrentObj.files.find(f => f.name.endsWith('.mkv'))
+        || torrentObj.files.reduce((a, b) => (a.length > b.length ? a : b), torrentObj.files[0]);
+
+      if (!videoFile) {
+        setStreamStatus('❌ Video dosyası bulunamadı.');
+        return;
       }
+
+      const ext = videoFile.name.split('.').pop().toLowerCase();
+      
+      if (ext === 'mp4' || ext === 'webm') {
+        // Browser can play directly — use blob URL
+        videoFile.getBlobURL((err, url) => {
+          if (err || !url) {
+            // Fallback: stream via renderTo
+            if (videoRef.current) {
+              videoRef.current.src = '';
+              videoFile.renderTo(videoRef.current, { autoplay: true, controls: true });
+            }
+            return;
+          }
+          if (videoRef.current) {
+            videoRef.current.src = url;
+            videoRef.current.play();
+          }
+        });
+        setStreamStatus('▶ Oynatılıyor...');
+      } else {
+        // mkv/avi — try renderTo (works in some browsers with codecs)
+        setStreamStatus('⚠️ ' + ext.toUpperCase() + ' formatı — codec desteğine bağlı olarak oynatılabilir...');
+        if (videoRef.current) {
+          videoFile.renderTo(videoRef.current, { autoplay: true, controls: true });
+        }
+        // After 15s, if no progress, show hint
+        setTimeout(() => {
+          if (progress < 0.02) {
+            setStreamStatus('⚠️ Bu format tarayıcıda oynatılamıyor olabilir. MP4 kalitesini deneyin.');
+          }
+        }, 15000);
+      }
+
       torrentObj.on('download', () => {
         setProgress(torrentObj.progress);
         setPeers(torrentObj.numPeers);
-        setStreamStatus(`⬇ %${Math.round(torrentObj.progress * 100)} · ${(torrentObj.downloadSpeed / 1048576).toFixed(1)} MB/s`);
+        const sp = (torrentObj.downloadSpeed / 1048576).toFixed(1);
+        setStreamStatus(`⬇ %${Math.round(torrentObj.progress * 100)} · ${torrentObj.numPeers} peers · ${sp} MB/s`);
       });
     });
     client.on('error', (err) => setStreamStatus('❌ ' + err.message));
@@ -273,6 +312,7 @@ export default function Home() {
                     <button key={i} className="quality-btn" onClick={() => startStream(selected, t)}>
                       <span className="quality-main">{t.quality} · {t.type}</span>
                       <span className="quality-info">{t.size} · 🌱{t.seeds} · 👥{t.peers}</span>
+                      <span className="quality-format">{t.video_codec} {t.bit_depth}bit</span>
                     </button>
                   ))}
                 </div>
@@ -289,7 +329,7 @@ export default function Home() {
           <div className="modal stream-modal" onClick={e => e.stopPropagation()}>
             <button className="modal-close" onClick={closeStream}>✕</button>
             <div className="video-wrapper">
-              <video ref={videoRef} controls autoPlay />
+              <video ref={videoRef} controls autoPlay playsInline crossOrigin="anonymous" />
               {progress < 0.01 && (
                 <div className="video-loading">
                   <div className="spinner" />
