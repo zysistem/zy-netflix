@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useRef, lazy, Suspense } from 'react';
+import { useEffect, useState, useRef, useCallback } from 'react';
 
 const API = 'https://movies-api.accel.li/api/v2';
 const TRACKERS = [
@@ -25,9 +25,23 @@ export default function Home() {
   const [searchResults, setSearchResults] = useState(null);
   const [streamStatus, setStreamStatus] = useState('');
   const [progress, setProgress] = useState(0);
+  const [peers, setPeers] = useState(0);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [heroIdx, setHeroIdx] = useState(0);
   const videoRef = useRef(null);
   const clientRef = useRef(null);
+  const rowRefs = useRef({});
 
+  // Rotate hero every 8 seconds
+  useEffect(() => {
+    if (movies.trending.length === 0) return;
+    const t = setInterval(() => {
+      setHeroIdx(i => (i + 1) % Math.min(movies.trending.length, 8));
+    }, 8000);
+    return () => clearInterval(t);
+  }, [movies.trending]);
+
+  // Fetch movies
   useEffect(() => {
     async function load() {
       try {
@@ -67,135 +81,177 @@ export default function Home() {
     return () => clearTimeout(t);
   }, [search]);
 
+  // Lock scroll when mobile menu open
+  useEffect(() => {
+    document.body.style.overflow = menuOpen ? 'hidden' : '';
+    return () => { document.body.style.overflow = ''; };
+  }, [menuOpen]);
+
+  // Row scroll
+  const scrollRow = useCallback((rowKey, dir) => {
+    const el = rowRefs.current[rowKey];
+    if (!el) return;
+    el.scrollBy({ left: dir * el.clientWidth * 0.8, behavior: 'smooth' });
+  }, []);
+
   async function startStream(movie, torrent) {
     setStreamStatus('Bağlanıyor...');
     setProgress(0);
+    setPeers(0);
     setStreaming({ movie, torrent });
     setSelected(null);
-
     if (clientRef.current) { clientRef.current.destroy(); }
 
     const client = await createClient();
-    if (!client) {
-      setStreamStatus('WebRTC desteklenmiyor. Tarayıcınız P2P stream için uygun değil.');
-      return;
-    }
+    if (!client) { setStreamStatus('WebRTC desteklenmiyor.'); return; }
     clientRef.current = client;
 
     const url = magnet(torrent.hash, movie.title_long || movie.title);
     setStreamStatus('⏳ Torrent bulunuyor (peers aranıyor)...');
 
     client.add(url, (torrentObj) => {
-      const file = torrentObj.files.find(f =>
-        f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm')
-      );
+      const file = torrentObj.files.find(f => f.name.endsWith('.mp4') || f.name.endsWith('.mkv') || f.name.endsWith('.webm'));
       const videoFile = file || torrentObj.files[0];
-
       if (videoFile && videoRef.current) {
         videoFile.renderTo(videoRef.current, { autoplay: true, controls: true });
         setStreamStatus('▶ Oynatılıyor...');
       }
-
       torrentObj.on('download', () => {
         setProgress(torrentObj.progress);
-        setStreamStatus(`⬇ %${Math.round(torrentObj.progress * 100)} · ${torrentObj.numPeers} peers · ${(torrentObj.downloadSpeed / 1048576).toFixed(1)} MB/s`);
+        setPeers(torrentObj.numPeers);
+        setStreamStatus(`⬇ %${Math.round(torrentObj.progress * 100)} · ${(torrentObj.downloadSpeed / 1048576).toFixed(1)} MB/s`);
       });
     });
-
-    client.on('error', (err) => {
-      setStreamStatus('❌ Hata: ' + err.message);
-    });
+    client.on('error', (err) => setStreamStatus('❌ ' + err.message));
   }
 
   function closeStream() {
     if (clientRef.current) { clientRef.current.destroy(); clientRef.current = null; }
-    setStreaming(null);
-    setStreamStatus('');
-    setProgress(0);
+    setStreaming(null); setStreamStatus(''); setProgress(0); setPeers(0);
   }
 
-  const rows = search
-    ? [{ title: `"${search}" için sonuçlar (${searchResults?.length || 0})`, items: searchResults || [] }]
+  const isSearching = search.trim().length > 0;
+  const rows = isSearching
+    ? [{ key: 'search', title: `"${search}" için sonuçlar (${searchResults?.length || 0})`, items: searchResults || [] }]
     : [
-        { title: '🔥 En Çok İndirilenler', items: movies.trending },
-        { title: '⭐ En Beğenilenler', items: movies.popular },
-        { title: '🆕 Son Eklenenler', items: movies.latest },
-        { title: '💥 Aksiyon', items: movies.action },
-        { title: '😂 Komedi', items: movies.comedy },
+        { key: 'trending', title: '🔥 En Çok İndirilenler', items: movies.trending },
+        { key: 'popular', title: '⭐ En Beğenilenler', items: movies.popular },
+        { key: 'latest', title: '🆕 Son Eklenenler', items: movies.latest },
+        { key: 'action', title: '💥 Aksiyon', items: movies.action },
+        { key: 'comedy', title: '😂 Komedi', items: movies.comedy },
       ];
 
-  const heroMovie = movies.trending[0];
+  const heroMovie = movies.trending[heroIdx];
+
+  function MovieCard({ m }) {
+    const seeds = m.torrents?.[0]?.seeds || 0;
+    const peers = m.torrents?.[0]?.peers || 0;
+    return (
+      <div className="movie-card" onClick={() => setSelected(m)}>
+        <img src={m.medium_cover_image || m.small_cover_image} alt={m.title} loading="lazy" />
+        <div className="movie-card-overlay">
+          <div className="movie-card-title">{m.title_english || m.title}</div>
+          <div className="movie-card-rating">⭐ {m.rating} · {m.year}</div>
+          <div className="movie-card-peers">🌱 {seeds} seed · 👥 {peers} peer</div>
+        </div>
+      </div>
+    );
+  }
+
+  function Row({ row }) {
+    return (
+      <div className="row" id={row.key}>
+        <div className="row-header">
+          <h2 className="row-title">{row.title}</h2>
+        </div>
+        <div className="row-wrapper">
+          <button className="row-arrow row-arrow-left" onClick={() => scrollRow(row.key, -1)} aria-label="Sol">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M15 18l-6-6 6-6" /></svg>
+          </button>
+          <div className="row-cards" ref={el => rowRefs.current[row.key] = el}>
+            {row.items.map(m => <MovieCard key={m.id} m={m} />)}
+          </div>
+          <button className="row-arrow row-arrow-right" onClick={() => scrollRow(row.key, 1)} aria-label="Sağ">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round"><path d="M9 18l6-6-6-6" /></svg>
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <>
+      {/* Navbar */}
       <nav className={`navbar ${scrolled ? 'scrolled' : ''}`}>
-        <a href="#" className="navbar-logo">ZYFLIX</a>
-        <ul className="navbar-links">
-          <li><a href="#">Ana Sayfa</a></li>
-          <li><a href="#trending">Popüler</a></li>
-          <li><a href="#latest">Yeniler</a></li>
-          <li><a href="#action">Aksiyon</a></li>
-        </ul>
-        <div className="navbar-right">
-          <input className="navbar-search" type="text" placeholder="🔍 Film ara..." value={search} onChange={(e) => setSearch(e.target.value)} />
-          <div className="navbar-avatar">Z</div>
+        <div className="navbar-inner">
+          <a href="#" className="navbar-logo">ZYFLIX</a>
+          <ul className={`navbar-links ${menuOpen ? 'mobile-open' : ''}`}>
+            <li><a href="#" onClick={() => setMenuOpen(false)}>Ana Sayfa</a></li>
+            <li><a href="#trending" onClick={() => setMenuOpen(false)}>Popüler</a></li>
+            <li><a href="#latest" onClick={() => setMenuOpen(false)}>Yeniler</a></li>
+            <li><a href="#action" onClick={() => setMenuOpen(false)}>Aksiyon</a></li>
+          </ul>
+          <div className="navbar-right">
+            <input className="navbar-search" type="text" placeholder="🔍 Film ara..." value={search} onChange={(e) => setSearch(e.target.value)} />
+            <div className="navbar-avatar">Z</div>
+            <button className={`hamburger ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(!menuOpen)} aria-label="Menu">
+              <span></span><span></span><span></span>
+            </button>
+          </div>
         </div>
       </nav>
 
+      {/* Mobile overlay */}
+      <div className={`mobile-overlay ${menuOpen ? 'active' : ''}`} onClick={() => setMenuOpen(false)} />
+
+      {/* Loading */}
       {loading && (
-        <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '48px', fontWeight: '900', color: '#e50914', letterSpacing: '-3px' }}>ZYFLIX</div>
-            <div style={{ color: '#666', marginTop: '16px' }}>Filmler yükleniyor...</div>
-          </div>
+        <div className="loading-screen">
+          <div className="loading-logo">ZYFLIX</div>
+          <div className="loading-text">Filmler yükleniyor...</div>
         </div>
       )}
 
-      {!loading && !search && heroMovie && (
-        <section className="hero">
+      {/* Hero — only when not searching */}
+      {!loading && !isSearching && heroMovie && (
+        <section className="hero" key={heroMovie.id}>
           <div className="hero-bg">
             <img src={heroMovie.background_image_original || heroMovie.large_cover_image} alt={heroMovie.title} />
           </div>
           <div className="hero-overlay" />
           <div className="hero-content">
-            <div className="hero-badge">🎬 Öne Çıkan</div>
+            <div className="hero-badge">🎬 Öne Çıkan ({heroIdx + 1}/{Math.min(movies.trending.length, 8)})</div>
             <h1 className="hero-title">{heroMovie.title_long || heroMovie.title}</h1>
             <p className="hero-desc">{heroMovie.summary || heroMovie.synopsis || `${heroMovie.title} (${heroMovie.year}) — ${heroMovie.genres?.join(', ')}`}</p>
+            <div className="hero-meta">
+              <span className="hero-rating">⭐ {heroMovie.rating}/10</span>
+              <span>{heroMovie.year}</span>
+              <span>{heroMovie.runtime} dk</span>
+              <span>{heroMovie.genres?.join(' · ')}</span>
+            </div>
             <div className="hero-buttons">
               <button className="hero-btn hero-btn-play" onClick={() => setSelected(heroMovie)}>
-                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
-                İzle
+                <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>İzle
               </button>
               <button className="hero-btn hero-btn-info" onClick={() => setSelected(heroMovie)}>
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>
-                Detaylar
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10" /><path d="M12 16v-4M12 8h.01" /></svg>Detaylar
               </button>
             </div>
           </div>
         </section>
       )}
 
+      {/* Content */}
       {!loading && (
-        <div className="content-section">
-          {rows.map((row, idx) => row.items.length > 0 && (
-            <div className="row" key={idx} id={['trending','popular','latest','action','comedy'][idx]}>
-              <h2 className="row-title">{row.title}</h2>
-              <div className="row-cards">
-                {row.items.map(m => (
-                  <div className="movie-card" key={m.id} onClick={() => setSelected(m)}>
-                    <img src={m.medium_cover_image || m.small_cover_image} alt={m.title} loading="lazy" />
-                    <div className="movie-card-overlay">
-                      <div className="movie-card-title">{m.title_english || m.title}</div>
-                      <div className="movie-card-rating">⭐ {m.rating} · {m.year}</div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
+        <div className={`content-section ${isSearching ? 'search-mode' : ''}`}>
+          {rows.map(row => row.items.length > 0 ? <Row key={row.key} row={row} /> : null)}
+          {isSearching && searchResults && searchResults.length === 0 && (
+            <div className="no-results">Sonuç bulunamadı 😔</div>
+          )}
         </div>
       )}
 
+      {/* Detail Modal */}
       {selected && !streaming && (
         <div className="modal-overlay active" onClick={() => setSelected(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
@@ -210,39 +266,46 @@ export default function Home() {
                 <span>{selected.genres?.join(' · ')}</span>
               </div>
               <p className="modal-desc">{selected.summary || selected.synopsis || 'Açıklama bulunmuyor.'}</p>
-              <div style={{ marginTop: '24px' }}>
-                <div style={{ fontSize: '14px', color: '#888', marginBottom: '12px' }}>▶ İzleme kalitesi seç:</div>
-                <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap' }}>
+              <div className="quality-section">
+                <div className="quality-label">▶ İzleme kalitesi seç:</div>
+                <div className="quality-list">
                   {selected.torrents?.sort((a,b) => parseInt(a.quality) - parseInt(b.quality)).map((t, i) => (
-                    <button key={i} className="quality-btn" onClick={() => startStream(selected, t)}>{t.quality} · {t.type} · {t.size}</button>
+                    <button key={i} className="quality-btn" onClick={() => startStream(selected, t)}>
+                      <span className="quality-main">{t.quality} · {t.type}</span>
+                      <span className="quality-info">{t.size} · 🌱{t.seeds} · 👥{t.peers}</span>
+                    </button>
                   ))}
                 </div>
-                <p style={{ marginTop: '12px', fontSize: '12px', color: '#666' }}>💡 P2P torrent stream — WebTorrent. Seed sayısı yüksek olanlar daha hızlı açılır.</p>
+                <p className="quality-hint">💡 Yüksek seed = daha hızlı açılır. P2P torrent stream — WebTorrent.</p>
               </div>
             </div>
           </div>
         </div>
       )}
 
+      {/* Stream Player */}
       {streaming && (
-        <div className="modal-overlay active" style={{ background: 'rgba(0,0,0,0.95)' }}>
-          <div className="modal" style={{ maxWidth: '1000px' }} onClick={e => e.stopPropagation()}>
+        <div className="modal-overlay active" style={{ background: 'rgba(0,0,0,0.97)' }}>
+          <div className="modal stream-modal" onClick={e => e.stopPropagation()}>
             <button className="modal-close" onClick={closeStream}>✕</button>
-            <div style={{ background: '#000', position: 'relative' }}>
-              <video ref={videoRef} style={{ width: '100%', maxHeight: '70vh', display: 'block' }} controls autoPlay />
+            <div className="video-wrapper">
+              <video ref={videoRef} controls autoPlay />
               {progress < 0.01 && (
-                <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', flexDirection: 'column', gap: '12px', pointerEvents: 'none' }}>
+                <div className="video-loading">
                   <div className="spinner" />
-                  <div style={{ color: '#fff', fontSize: '14px' }}>{streamStatus}</div>
+                  <div className="video-loading-text">{streamStatus}</div>
                 </div>
               )}
             </div>
             <div className="modal-body">
-              <h3 style={{ marginBottom: '8px' }}>{streaming.movie.title_long || streaming.movie.title}</h3>
-              <div style={{ fontSize: '14px', color: '#46d369', marginBottom: '8px' }}>{streamStatus}</div>
+              <h3>{streaming.movie.title_long || streaming.movie.title}</h3>
+              <div className="stream-stats">
+                <span className="stream-stat-green">{streamStatus}</span>
+                <span>👥 {peers} peers</span>
+              </div>
               {progress > 0 && (
-                <div style={{ height: '4px', background: '#333', borderRadius: '4px', overflow: 'hidden' }}>
-                  <div style={{ height: '100%', width: `${progress * 100}%`, background: '#e50914', transition: 'width 0.5s' }} />
+                <div className="stream-progress">
+                  <div className="stream-progress-bar" style={{ width: `${progress * 100}%` }} />
                 </div>
               )}
             </div>
@@ -250,38 +313,69 @@ export default function Home() {
         </div>
       )}
 
-      <footer>
-        <p>© {new Date().getFullYear()} ZYflix — YTS API + WebTorrent</p>
-        <p style={{ marginTop: '8px', opacity: '0.4', fontSize: '11px' }}>⚠️ P2P torrent stream. İçerik kullanıcı sorumluluğundadır.</p>
-      </footer>
+      {/* Footer */}
+      {!loading && (
+        <footer>
+          <div className="footer-inner">
+            <div className="footer-brand">ZYFLIX</div>
+            <div className="footer-links">
+              <a href="#">Ana Sayfa</a>
+              <a href="#trending">Popüler</a>
+              <a href="#latest">Yeniler</a>
+              <a href="#action">Aksiyon</a>
+              <a href="#comedy">Komedi</a>
+            </div>
+            <div className="footer-social">
+              <a href="https://github.com/zysistem/zy-netflix">GitHub</a>
+              <a href="https://zy-netflix.vercel.app">Vercel</a>
+            </div>
+          </div>
+          <div className="footer-bottom">
+            <p>© {new Date().getFullYear()} ZYflix — YTS API + WebTorrent P2P</p>
+            <p className="footer-disclaimer">⚠️ Bu bir demo projedir. İçerik kullanıcı sorumluluğundadır.</p>
+          </div>
+        </footer>
+      )}
 
       <style jsx>{`
-        .quality-btn {
-          padding: 10px 18px;
-          background: rgba(229,9,20,0.15);
-          border: 1px solid rgba(229,9,20,0.4);
-          border-radius: 4px;
-          color: #fff;
-          cursor: pointer;
-          font-size: 14px;
-          font-weight: 600;
-          transition: all 0.2s;
+        .row-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; padding: 0 4px; }
+        .row-wrapper { position: relative; display: flex; align-items: center; }
+        .row-cards { display: flex; gap: 10px; overflow-x: auto; scroll-behavior: smooth; padding: 10px 4px; -webkit-overflow-scrolling: touch; flex: 1; }
+        .row-cards::-webkit-scrollbar { height: 0; display: none; }
+        .row-arrow {
+          position: absolute; z-index: 10; width: 44px; height: 100%; min-height: 280px;
+          background: linear-gradient(90deg, rgba(20,20,20,0.9), transparent);
+          border: none; color: #fff; cursor: pointer; font-size: 24px;
+          display: flex; align-items: center; justify-content: center;
+          opacity: 0; transition: opacity 0.3s; top: 0;
         }
-        .quality-btn:hover { background: rgba(229,9,20,0.3); }
-        .spinner {
-          width: 50px; height: 50px;
-          border: 3px solid rgba(255,255,255,0.1);
-          border-top-color: #e50914;
-          border-radius: 50%;
-          animation: spin 1s linear infinite;
-        }
+        .row-arrow-right { right: 0; background: linear-gradient(270deg, rgba(20,20,20,0.9), transparent); }
+        .row-wrapper:hover .row-arrow { opacity: 1; }
+        .row-arrow svg { width: 28px; height: 28px; }
+        .movie-card-peers { font-size: 11px; color: #888; margin-top: 2px; }
+        .hero-meta { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 20px; font-size: 14px; color: var(--text-secondary); }
+        .hero-rating { color: #46d369; font-weight: 700; }
+        .quality-btn { display: flex; flex-direction: column; gap: 4px; padding: 12px 18px; background: rgba(229,9,20,0.15); border: 1px solid rgba(229,9,20,0.4); border-radius: 6px; color: #fff; cursor: pointer; font-size: 15px; font-weight: 700; transition: all 0.2s; text-align: center; }
+        .quality-btn:hover { background: rgba(229,9,20,0.35); transform: translateY(-2px); }
+        .quality-info { font-size: 11px; font-weight: 400; color: #aaa; }
+        .no-results { text-align: center; padding: 80px 20px; font-size: 20px; color: #666; }
+        .search-mode { margin-top: 100px !important; }
+        .video-wrapper { background: #000; position: relative; }
+        video { width: 100%; max-height: 65vh; display: block; }
+        .video-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; }
+        .video-loading-text { color: #fff; font-size: 14px; }
+        .stream-modal { max-width: 1000px; }
+        .stream-stats { display: flex; gap: 20px; font-size: 14px; margin: 8px 0; }
+        .stream-stat-green { color: #46d369; }
+        .stream-progress { height: 4px; background: #333; border-radius: 4px; overflow: hidden; }
+        .stream-progress-bar { height: 100%; background: #e50914; transition: width 0.5s; }
+        .spinner { width: 50px; height: 50px; border: 3px solid rgba(255,255,255,0.1); border-top-color: #e50914; border-radius: 50%; animation: spin 1s linear infinite; }
         @keyframes spin { to { transform: rotate(360deg); } }
       `}</style>
     </>
   );
 }
 
-// Client-side WebTorrent loader
 async function createClient() {
   if (typeof window === 'undefined') return null;
   const WebTorrent = (await import('webtorrent/dist/webtorrent.min.js')).default;
